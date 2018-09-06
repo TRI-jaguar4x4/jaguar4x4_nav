@@ -54,6 +54,11 @@ public:
         std::bind(&Jaguar4x4Nav::odomCallback, this, std::placeholders::_1),
         rmw_qos_profile_sensor_data,
         odom_cb_grp_);
+
+    this->set_parameter_if_not_set("velocity_constant", VELOCITY_CONSTANT_DEFAULT);
+    this->set_parameter_if_not_set("heading_constant", HEADING_CONSTANT_DEFAULT);
+    this->set_parameter_if_not_set("distance_epsilon", DISTANCE_EPSILON_DEFAULT);
+    this->set_parameter_if_not_set("heading_epsilon", HEADING_EPSILON_DEFAULT);
   }
 
   ~Jaguar4x4Nav()
@@ -76,12 +81,12 @@ private:
   std::string goToGoalXY(double goal_x_m, double goal_y_m)
   {
     std::string error;
-    double vel_const = 0.3;
-    double h_const = 1.5;
-    double v_max = 0.6; // don't go faster than this - it's scary
-    double omega_max = 0.15; // don't go faster than this - it's scary
-    double v_min = 0.1; // don't go slower than this; the vehicle can't move
-    double distance_epsilon = 0.05;
+    double vel_const;
+    double h_const;
+    double distance_epsilon;
+    this->get_parameter("velocity_constant", vel_const);
+    this->get_parameter("heading_constant", h_const);
+    this->get_parameter("distance_epsilon", distance_epsilon);
 
     double x_diff;
     double y_diff;
@@ -129,10 +134,10 @@ private:
 
       std::chrono::time_point<std::chrono::system_clock> now = std::chrono::system_clock::now();
       auto last_pose_change_diff_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_pose_change_time);
-      if (last_pose_change_diff_ms.count() > kNoMovementTimeoutMS) {
+      if (last_pose_change_diff_ms.count() > NO_MOVEMENT_TIMEOUT_MS) {
         // We didn't have any changes in pose in the last 5 seconds; assume we
         // are stuck or eStopped and fail the service.
-        RCLCPP_INFO(get_logger(), "No movement in %u milliseconds, giving up", kNoMovementTimeoutMS);
+        RCLCPP_INFO(get_logger(), "No movement in %u milliseconds, giving up", NO_MOVEMENT_TIMEOUT_MS);
         error += "No movement in 5 seconds ";
         break;
       }
@@ -150,19 +155,19 @@ private:
         break;
       }
 
-      if (fabs(velocity) > v_max) {
+      if (fabs(velocity) > VELOCITY_MAX_MPS) {
         if (velocity > 0.0) {
-          velocity = v_max;
+          velocity = VELOCITY_MAX_MPS;
         } else {
-          velocity = -v_max;
+          velocity = -VELOCITY_MAX_MPS;
         }
       }
 
-      if (fabs(velocity) < v_min) {
+      if (fabs(velocity) < VELOCITY_MIN_MPS) {
         if (velocity > 0.0) {
-          velocity = v_min;
+          velocity = VELOCITY_MIN_MPS;
         } else {
-          velocity = -v_min;
+          velocity = -VELOCITY_MIN_MPS;
         }
       }
 
@@ -174,11 +179,11 @@ private:
       tf2::Matrix3x3(quat).getRPY(roll, pitch, yaw);
       omega = h_const * (goal_theta_world_frame - yaw);
 
-      if (fabs(omega) > omega_max) {
+      if (fabs(omega) > OMEGA_MAX_RAD_PER_SECOND) {
         if (omega > 0.0) {
-          omega = omega_max;
+          omega = OMEGA_MAX_RAD_PER_SECOND;
         } else {
-          omega = -omega_max;
+          omega = -OMEGA_MAX_RAD_PER_SECOND;
         }
       }
 
@@ -199,6 +204,8 @@ private:
   std::string goToGoalTheta(double goal_theta_rad)
   {
     std::string error;
+    double heading_epsilon;
+    this->get_parameter("heading_epsilon", heading_epsilon);
 
     RCLCPP_INFO(get_logger(), "in goToGoalTheta with goal theta = %f", goal_theta_rad);
 
@@ -216,9 +223,9 @@ private:
     std::chrono::time_point<std::chrono::system_clock> last_pose_change_time = start_time;
     while (true) {
       std::cv_status cv_status = odom_cv_.wait_for(lk,
-                                                   std::chrono::milliseconds(kNoOdomTimeoutMS));
+                                                   std::chrono::milliseconds(NO_ODOM_TIMEOUT_MS));
       if (cv_status == std::cv_status::timeout) {
-        RCLCPP_INFO(get_logger(), "No odom update in %d ms, giving up", kNoOdomTimeoutMS);
+        RCLCPP_INFO(get_logger(), "No odom update in %d ms, giving up", NO_ODOM_TIMEOUT_MS);
         error += "No data before timeout ";
         break;
       }
@@ -229,10 +236,10 @@ private:
       }
       std::chrono::time_point<std::chrono::system_clock> now = std::chrono::system_clock::now();
       auto last_pose_change_diff_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_pose_change_time);
-      if (last_pose_change_diff_ms.count() > kNoMovementTimeoutMS) {
+      if (last_pose_change_diff_ms.count() > NO_MOVEMENT_TIMEOUT_MS) {
         // We didn't have any changes in pose in the last 5 seconds; assume we
         // are stuck or eStopped and fail the service.
-        RCLCPP_INFO(get_logger(), "No movement in %u milliseconds, giving up", kNoMovementTimeoutMS);
+        RCLCPP_INFO(get_logger(), "No movement in %u milliseconds, giving up", NO_MOVEMENT_TIMEOUT_MS);
         error += "No movement in 5 seconds ";
         break;
       }
@@ -250,7 +257,7 @@ private:
         error += "got NaN for angle difference ";
         break;
       }
-      if (fabs(angle_abs_diff) < .05) {
+      if (fabs(angle_abs_diff) < heading_epsilon) {
         break;
       }
 
@@ -267,9 +274,9 @@ private:
       cmd_vel_msg->angular.x = 0.0;
       cmd_vel_msg->angular.y = 0.0;
       if (yaw >= 0.0) {
-        cmd_vel_msg->angular.z = 0.2;
+        cmd_vel_msg->angular.z = OMEGA_MAX_RAD_PER_SECOND;
       } else {
-        cmd_vel_msg->angular.z = -0.2;
+        cmd_vel_msg->angular.z = -OMEGA_MAX_RAD_PER_SECOND;
       }
       cmd_vel_pub_->publish(cmd_vel_msg);
     }
@@ -323,7 +330,7 @@ private:
 
   std::string waitForOdom()
   {
-    // Wait for new odom__
+    // Wait for new odom_
     std::unique_lock<std::timed_mutex> lk(odom_mutex_, std::defer_lock);
     bool got_lock = lk.try_lock_for(std::chrono::milliseconds(100));
     if (!got_lock) {
@@ -340,8 +347,15 @@ private:
   }
 
   // Tunable constants
-  const uint32_t kNoOdomTimeoutMS = 500;
-  const uint32_t kNoMovementTimeoutMS = 5000;
+  const uint32_t NO_ODOM_TIMEOUT_MS = 500;
+  const uint32_t NO_MOVEMENT_TIMEOUT_MS = 5000;
+  const double VELOCITY_MAX_MPS = 0.6;  // Don't go faster than this; it is scary
+  const double VELOCITY_MIN_MPS = 0.1;  // Don't go slower than this; the vehicle can't move
+  const double OMEGA_MAX_RAD_PER_SECOND = 0.15;
+  const double VELOCITY_CONSTANT_DEFAULT = 0.3;
+  const double HEADING_CONSTANT_DEFAULT = 1.5;
+  const double DISTANCE_EPSILON_DEFAULT = 0.05;
+  const double HEADING_EPSILON_DEFAULT = 0.05;
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr                     cmd_vel_pub_;
   rclcpp::Service<jaguar4x4_nav_msgs::srv::GoToGoalPose>::SharedPtr           go_to_goal_pose_srv_;
