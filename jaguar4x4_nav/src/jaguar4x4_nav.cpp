@@ -80,6 +80,8 @@ private:
     double h_const = 1.5;
     double v_max = 0.6; // don't go faster than this - it's scary
     double omega_max = 0.15; // don't go faster than this - it's scary
+    double v_min = 0.1; // don't go slower than this; the vehicle can't move
+    double distance_epsilon = 0.05;
 
     double x_diff;
     double y_diff;
@@ -127,10 +129,10 @@ private:
 
       std::chrono::time_point<std::chrono::system_clock> now = std::chrono::system_clock::now();
       auto last_pose_change_diff_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_pose_change_time);
-      if (last_pose_change_diff_ms.count() > 5000) {
+      if (last_pose_change_diff_ms.count() > kNoMovementTimeoutMS) {
         // We didn't have any changes in pose in the last 5 seconds; assume we
         // are stuck or eStopped and fail the service.
-        RCLCPP_INFO(get_logger(), "No movement in 5 seconds, giving up");
+        RCLCPP_INFO(get_logger(), "No movement in %u milliseconds, giving up", kNoMovementTimeoutMS);
         error += "No movement in 5 seconds ";
         break;
       }
@@ -143,7 +145,7 @@ private:
       velocity = vel_const * distance;
 
       // TODO: we actually want to be within a bounding box of the goal
-      if (distance < 0.05) {
+      if (distance < distance_epsilon) {
         // we've gone the goal distance
         break;
       }
@@ -153,6 +155,14 @@ private:
           velocity = v_max;
         } else {
           velocity = -v_max;
+        }
+      }
+
+      if (fabs(velocity) < v_min) {
+        if (velocity > 0.0) {
+          velocity = v_min;
+        } else {
+          velocity = -v_min;
         }
       }
 
@@ -206,7 +216,7 @@ private:
     std::chrono::time_point<std::chrono::system_clock> last_pose_change_time = start_time;
     while (true) {
       std::cv_status cv_status = odom_cv_.wait_for(lk,
-                                                       std::chrono::milliseconds(kNoOdomTimeoutMS));
+                                                   std::chrono::milliseconds(kNoOdomTimeoutMS));
       if (cv_status == std::cv_status::timeout) {
         RCLCPP_INFO(get_logger(), "No odom update in %d ms, giving up", kNoOdomTimeoutMS);
         error += "No data before timeout ";
@@ -219,10 +229,10 @@ private:
       }
       std::chrono::time_point<std::chrono::system_clock> now = std::chrono::system_clock::now();
       auto last_pose_change_diff_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_pose_change_time);
-      if (last_pose_change_diff_ms.count() > 5000) {
+      if (last_pose_change_diff_ms.count() > kNoMovementTimeoutMS) {
         // We didn't have any changes in pose in the last 5 seconds; assume we
         // are stuck or eStopped and fail the service.
-        RCLCPP_INFO(get_logger(), "No movement in 5 seconds, giving up");
+        RCLCPP_INFO(get_logger(), "No movement in %u milliseconds, giving up", kNoMovementTimeoutMS);
         error += "No movement in 5 seconds ";
         break;
       }
@@ -329,7 +339,9 @@ private:
     return "";
   }
 
+  // Tunable constants
   const uint32_t kNoOdomTimeoutMS = 500;
+  const uint32_t kNoMovementTimeoutMS = 5000;
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr                     cmd_vel_pub_;
   rclcpp::Service<jaguar4x4_nav_msgs::srv::GoToGoalPose>::SharedPtr           go_to_goal_pose_srv_;
